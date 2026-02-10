@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from typing import Optional
 from src.db import(
     UserDB,
     RefreshTokenDB,
@@ -47,8 +48,11 @@ def index():
 @app.post("/register")
 async def register(
     user_data: UserCreate,
-    session: AsyncSession = Depends(get_async_session)
+    session: AsyncSession = Depends(get_async_session),
+    current_user : Optional[UserDB] = Depends(get_current_optional_user)
 ) -> UserResponse:
+    if current_user:
+        raise HTTPException(status_code=403, detail="Already logged in")
     result = await session.execute(select(UserDB).where(UserDB.email == user_data.email))
     user_in_db = result.scalar_one_or_none()
 
