@@ -32,27 +32,25 @@ def verify_password(plain_password, hashed_password) -> bool:
 
 async def get_user_by_email(
     email: str,
-    session: AsyncSession = Depends(get_async_session)
+    session: AsyncSession
 ):
-    result = await session.execute(select(UserDB).where(UserDB.email == email))
-    user = result.scalar_one_or_none()
-
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    return user
+    result = await session.execute(
+        select(UserDB).where(UserDB.email == email)
+    )
+    return result.scalar_one_or_none()
 
 async def is_authenticated_user(
     email: str,
     plain_password: str,
-    session: AsyncSession = Depends(get_async_session)
-) -> bool:
+    session: AsyncSession,
+) -> UserDB|None:
     
     user = await get_user_by_email(email, session)
-
-    if verify_password(plain_password, user.password):
-        return True
-    
-    return False
+    if not user:
+        return None
+    if not verify_password(plain_password, user.password):
+        return None  
+    return user
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")
 oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="/login", auto_error=False)
@@ -93,7 +91,7 @@ def create_refresh_token(data: dict, expire_delta: Optional[timedelta] = None):
         raise HTTPException(status_code=400, detail="Some thing get wrong inside create_access_token()")
 
 def verify_access_token(
-    token: str = Depends(oauth2_scheme),    
+    token: str,    
 ):
     try:
         payload = jwt.decode(token, SECURITY_KEY, algorithms=[ALGORITHM])
@@ -101,11 +99,11 @@ def verify_access_token(
             raise HTTPException(status_code=401, detail="Invalid token type")
         email = payload.get("sub")
         if not email:
-            raise HTTPException(status_code=404, detail="Email not found")
+            raise HTTPException(status_code=401, detail="Invalid token payload")
         return TokenData(email=email)
 
     except JWTError:
-        raise HTTPException(status_code=400, detail="Invalid token")
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
     
 def verify_refresh_token(
     token: str,
@@ -116,10 +114,47 @@ def verify_refresh_token(
             raise HTTPException(status_code=401, detail="Invalid token type")
         email = payload.get("sub")
         if not email:
-            raise HTTPException(status_code=404, detail="Email not found")
+            raise HTTPException(status_code=401, detail="Invalid token payload")
         return TokenData(email=email)
 
     except JWTError:
-        raise HTTPException(status_code=400, detail="Invalid token")
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
     
 
+async def get_current_user(
+    token: str = Depends(oauth2_scheme),
+    session: AsyncSession = Depends(get_async_session),     
+):
+
+    token_data = verify_access_token(token)
+
+    user = await get_user_by_email(token_data.email, session)
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    return user
+
+async def get_current_super_user(
+    user: UserDB = Depends(get_current_user),
+):
+    if not user.is_super_user:
+        raise HTTPException(
+            status_code=403,
+            detail="User is not a super user"
+        )
+    return user
+    
+
+async def get_current_optional_user(
+    token: Optional[str] = Depends(oauth2_scheme_optional),
+    session: AsyncSession = Depends(get_async_session)      
+):
+    if not token:
+        return None
+    try:
+        token_data = verify_access_token(token)
+        user = await get_user_by_email(token_data.email, session)
+        if not user:
+            return None
+        return user
+    except HTTPException:
+        return None
