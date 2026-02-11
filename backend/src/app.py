@@ -26,6 +26,8 @@ from src.auth import(
     is_authenticated_user,
     create_access_token,
     create_refresh_token,
+    verify_access_token,
+    verify_refresh_token,
     get_current_super_user
 )
 from contextlib import asynccontextmanager
@@ -139,4 +141,46 @@ async def login(
 
     return {"access_token": access_token, "token_type": "bearer"}
 
+@app.post("/refresh")
+async def refresh(
+    refresh_token: str = Cookie(None),
+    session: AsyncSession = Depends(get_async_session)
+):
+    if not refresh_token:
+        raise HTTPException(status_code=401, detail="Refresh token missing")
+    payload = verify_refresh_token(refresh_token)
 
+    result = await session.execute(select(RefreshTokenDB).where(RefreshTokenDB.ref_token == refresh_token))
+    token_in_db = result.scalar_one_or_none()
+
+    if not token_in_db or token_in_db.is_revoked:
+        raise HTTPException(status_code=401, detail="Token is already revoked!")
+    
+    
+    new_refresh_token = create_refresh_token(
+        data={"sub":payload.email, "type": "refresh"},
+        expire_delta=timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+    )
+
+    token_in_db.ref_token = new_refresh_token
+    await session.commit()
+    await session.refresh(token_in_db)
+
+    access_token = create_access_token(
+        data={"sub":payload.email, "type":"access"},
+        expire_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
+    
+    response = JSONResponse(content={"access_token":access_token, "token_type":"bearer"})
+
+    # it will over write the previous token
+    response.set_cookie(
+        key="refresh_token",
+        value=new_refresh_token,
+        httponly=True,
+        max_age=REFRESH_TOKEN_EXPIRE_DAYS*24*60*60,
+        secure=True,
+        samesite="lax"
+    )
+
+    return response
