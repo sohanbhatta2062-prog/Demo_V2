@@ -184,3 +184,27 @@ async def refresh(
     )
 
     return response
+
+
+@app.post("/logout")
+async def logout(
+    response: Response,
+    refresh_token: str = Cookie(None, alias="refresh_token"),
+    session: AsyncSession = Depends(get_async_session),
+    current: UserDB= Depends(get_current_user)
+):
+    if not refresh_token:
+        response.delete_cookie("refresh_token")
+        return {"message": "Logged out"}
+
+    result = await session.execute(select(RefreshTokenDB).where(RefreshTokenDB.ref_token == refresh_token))
+    token_db = result.scalar_one_or_none()
+
+    if token_db:
+        await session.delete(token_db)
+        await session.commit()
+
+
+    response.delete_cookie("refresh_token")
+    return {"message": "Logged out"}
+
