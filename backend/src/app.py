@@ -1,4 +1,5 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Cookie, Response
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
@@ -28,6 +29,9 @@ from src.auth import(
     get_current_super_user
 )
 from contextlib import asynccontextmanager
+from dotenv import load_dotenv
+from datetime import datetime, timedelta
+import os
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -37,6 +41,14 @@ async def lifespan(app: FastAPI):
     finally:
         await engine.dispose()
         
+
+
+load_dotenv()
+
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES"))
+REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS"))
+
+
 
 app = FastAPI(lifespan=lifespan)
 
@@ -79,4 +91,52 @@ async def register(
     )
 
     return res
+
+
+@app.post("/login")
+async def login(
+    user_login_data: UserLogin,
+    response: Response,
+    session: AsyncSession = Depends(get_async_session),
+    current_user: Optional[UserDB] = Depends(get_current_optional_user)
+):
+    if current_user:
+        raise HTTPException(status_code=403, detail="Already logged in")
+    
+    user = await is_authenticated_user(user_login_data.email, user_login_data.password, session)
+
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    
+    
+    access_token = create_access_token(
+        data={"sub":user.email, "type":"access"},
+        expire_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
+
+    refresh_token = create_refresh_token(
+        data={"sub":user.email, "type":"refresh"},
+        expire_delta=timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+    )
+
+    ref_token_db = RefreshTokenDB(
+        u_id = user.u_id,
+        ref_token = refresh_token
+    )
+
+    session.add(ref_token_db)
+    await session.commit()
+    await session.refresh(ref_token_db)
+
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        httponly=True,
+        max_age=REFRESH_TOKEN_EXPIRE_DAYS*24*60*60,
+        secure=True,
+        samesite="lax"
+    )
+
+    return {"access_token": access_token, "token_type": "bearer"}
+
 
