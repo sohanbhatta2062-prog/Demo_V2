@@ -208,3 +208,9 @@ async def logout(
     response.delete_cookie("refresh_token")
     return {"message": "Logged out"}
 
+
+@app.get("/me")
+def me(
+    current_user: UserDB = Depends(get_current_user)
+):
+    return {"Hello":"World"}
