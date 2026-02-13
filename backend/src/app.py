@@ -135,7 +135,7 @@ async def login(
         value=refresh_token,
         httponly=True,
         max_age=REFRESH_TOKEN_EXPIRE_DAYS*24*60*60,
-        secure=True,
+        secure=False,
         samesite="lax"
     )
 
@@ -179,7 +179,7 @@ async def refresh(
         value=new_refresh_token,
         httponly=True,
         max_age=REFRESH_TOKEN_EXPIRE_DAYS*24*60*60,
-        secure=True,
+        secure=False,
         samesite="lax"
     )
 
@@ -194,16 +194,19 @@ async def logout(
     current: UserDB= Depends(get_current_user)
 ):
     if not refresh_token:
-        response.delete_cookie("refresh_token")
-        return {"message": "Logged out"}
+        raise HTTPException(status_code=400, detail="Refresh token not found")
 
-    result = await session.execute(select(RefreshTokenDB).where(RefreshTokenDB.ref_token == refresh_token))
+    result = await session.execute(select(RefreshTokenDB).where(RefreshTokenDB.u_id == current.u_id))
     token_db = result.scalar_one_or_none()
 
-    if token_db:
-        await session.delete(token_db)
-        await session.commit()
+    if not token_db:
+        response.delete_cookie("refresh_token")
+        return {"message": "Logged out (token already removed)"}
+    token_db.is_revoked = True
+    await session.delete(token_db)
+    await session.commit()
 
+    print("Logout cookie token:", refresh_token)
 
     response.delete_cookie("refresh_token")
     return {"message": "Logged out"}
